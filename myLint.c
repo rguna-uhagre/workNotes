@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
 
     fread(buf, 1, size, f);
 
-    /* Naive in-place replacement */
+    /* Naive in-place replacement, add three spaces where previously there were only two */
     for (long i = 0; i < size - 1; i++) {
         if (buf[i] == ' ' && buf[i + 1] == ' ') {
             buf[i]     = ' ';

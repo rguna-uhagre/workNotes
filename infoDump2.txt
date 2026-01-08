@@ -1,0 +1,423 @@
+# Unknowns
+
+
+
+# Path To Be Traveled
+![[Pasted image 20240318141854.png|525]]
+[RFC definitions](https://datatracker.ietf.org/doc/html/draft-ietf-bess-rfc7432bis/#name-terminology)
+Fast reroute
+- Multihoming
+    - Redundant vteps performing same reachability
+    - Augments type 2 routes using ESI
+
+Local repair vs remote repair
+
+**Fast Convergence with EVPN DCI**
+- fail
+     - 1 WAN Connectivity Loss
+         - GW-A1 loses direct WAN connectivity
+     - 2 Local DC Connectivity Loss
+         - GW-A1 loses spine connectivity
+     - 3 Gateway node failure
+         - GW-A1 undergoes unplanned device reload
+
+Underlay IP network can use whatever control plane protocol -- BGP, OSPF, ISIS, whatever. Overlay uses BGP, specifically MP-BGP
+
+# Questions
+Why is IP multicast not commonly used to distribute BUM traffic? We already have IP underlay. Does Arista support? 
+
+active active multihoming is basically like mlag but more extensible?
+    is it only between p edge and customer edge??
+
+EVI basically a group of vteps that are linked together by vni (or label)?
+
+How does multihoming fit in with leaf spine topology? Isn't there already redundancy because we're using an L3 network
+    the leafs would be configured as vteps, and they would be considered PE?
+
+also why is designated forwarder important? Isn't this active-active? Like ECMP?
+
+pe and ce?
+
+multihoming: type 1, type 4
+l2vni: type 3, type 2
+l3vni: type 3, type 5
+
+what problem does type 1 and type 4 routes solve. What 
+
+https://www.arista.com/en/um-eos/eos-evpn-overview
+- **Route Distinguisher (RD):** Unique number prepended to the advertised address within the VRF, ensuring support for overlapping IPs and MACs across different tenants.
+
+what is varp?
+
+# Commands
+##### `show ip arp`
+![[Pasted image 20240324190638.png|450]]
+When using selective arp, the remote entries disappear in the output of the first command, though they're still known, and displayed when the second command is run.
+
+##### `show ip int brief`
+![[Pasted image 20240326120719.png]]
+##### Clear arp cache
+![[Pasted image 20240324191243.png|475]]
+
+##### `show vxlan address-table`
+![[Pasted image 20240324154331.png]]
+
+##### `show vxlan flood vtep`
+![[Pasted image 20240324154425.png]]
+
+##### `show bgp evpn route-type imet... detail`
+![[Pasted image 20240324154654.png]]
+
+##### `show bgp evpn route-type mac-ip... detail`
+![[Pasted image 20240324154541.png]]
+Dual VNI, mac-**IP**
+![[Pasted image 20240324215736.png]]
+##### `show bgp evpn instance...`
+![[Pasted image 20240324204545.png]]
+##### `show run sec router bgp`
+Leaf1A is sending to other listening neighbors. I think this is from webinar 1
+![[Pasted image 20240324161010.png]]
+# Mlag vs A/A MH
+![[Pasted image 20240324220404.png]]
+# Multihoming
+## Config Example
+![[Screenshot 2024-03-22 134744.png]]
+![[Pasted image 20240324201244.png|525]]
+operkey derived from port-channel id. First 4 (really 3) entries must match in every leaf. These are advertised to the host, which is unaware of anything to do with multihoming.
+## Scenario 1: Type 4 Rts
+Type 4 route allows VTEPs connected to same ESI to discover each other, which is used for DF election. ES-Import RT decides whether the route will be cared about by other bgp peers.
+
+```
+interface Ethernet10
+    channel-group 10 mode active
+!
+interface Ethernet11
+    channel-group 11 mode active
+interface Port-Channe110
+    description HostC
+    switchport access vlan 30
+    !
+    evpn ethernet-segment
+        identifier 00cc:cccc:cccc:cccc:cccc   // esi
+        route-target import cc:cc:cc:cc:cc:cc // es-import rt
+    lacp system-id 7483.ef19.201d
+    spanning-tree portfast
+    spanning-tree bpdufilter enable
+!
+interface Port-Channe111
+    description HostE
+    switchport trunk native vlan 20
+    switchport trunk allowed vlan 20-21
+    switchport mode trunk
+    evpn ethernet-segment
+        identifier 00ee:eeee:eeee:eeee:eeee   // esi
+        route-target import ee:ee:ee:ee:ee:ee // es-import rt
+    lacp system-id 7483.ef19.201d
+    spanning-tree portfast
+    spanning-tree bpdufilter enable
+```
+Type 4 Routes:
+Both from Leaf2A for now because nothing is configured on 2B yet. Two segments.
+![[Pasted image 20240324203741.png]]
+After configuring 2B
+![[Pasted image 20240324204443.png]]
+### DF Election
+![[Pasted image 20240324200905.png]]
+
+![[Pasted image 20240324204545.png]]
+
+### DF Functionality & Split Horizon
+![[Pasted image 20240324205114.png|475]]
+![[Pasted image 20240324205050.png|475]]
+Local Bias
+
+Rules:
+Broadcast frames received from host forwarded to all hosts in the vlan on the vtep, even if not DF
+Broadcast frames which are received through the vxlan tunnel should be 
+    Forwarded to all orphaned hosts by all vteps
+    If DF and if received from a vtep which is not part of the ES, forwarded on the ES
+
+## Scenario 2: Type 1 per EVI Routes - L2 ECMP
+"Mac aliasing route" because L2ECMP forwarding
+Type 1 per EVI Routes...
+Enable vtep to announce attachment to a given EVI on a particular ES. Lays the foundation for ECMP to multihomed device.
+
+There can be multiple EVIs utilizing one ESI. An EVI can of course also have multiple ESIs.
+    First part means that on one ethernet segment, as identified by an ESI, you can have multiple vlans/evpn instances (assuming vlan-based where vlan/vni/evi are basically synonymous)
+    Second part means that across a whole evi, there might be ethernet segments in front of some of the members of the evi
+![[Pasted image 20240324211104.png]]
+![[Pasted image 20240324211124.png]]
+Even though leaf1a only receives a type 2 route from leaf2a (none from 2b), it still knows it can include leaf2b in ecmp group. Type 1 route is programming the forwarding plane, like type 2 usually does.
+
+AD routes from leaf2a and 2b
+![[Pasted image 20240324211743.png]]
+Leaf1a is able to know to send to both despite not getting type 2 route from 2b (2.2.2.3)
+![[Pasted image 20240324212019.png]]
+## Scenario 3: Type 1 per ES Routes - Mass Withdraw
+![[Pasted image 20240324212851.png]]
+![[Pasted image 20240324213145.png]]
+Not always a withdraw, just used to make withdraw more effective. 
+Says every EVI it was connected to on that ESI
+
+## Scenario 4 - L3 ECMP with the Proxy Flag
+![[Pasted image 20240324214103.png]]
+Leaf2b cares a lot about the nonzero esi in the rt-2 sent by leaf2a. It adds an arp entry for HostC  and originates its own type 2 route now! Proxy.
+
+The dual vni type 2 routes shown in the image above
+![[Pasted image 20240324215736.png]]
+
+From a bridging standpoint, if we are bridging from leaf 1a directly to HostC's MAC address then the per Evi route will give us ecmp forwarding from that perspective.
+
+However if we look at leaf1A and it doesn't even have vlan 30 present, then we know for it to reach HostC it has to perform a routing operation, which requires the dual vni route.
+
+56:02
+
+perspective however if we look at leaf 1a and it doesn't even have VLAN 30 present then we know the frit to reach
+
+56:09
+
+hosts see it has to perform a routing operation and that routing operation we're going to be using the symmetric
+
+56:15
+
+IRB model and we're going to use the dual VN I type to route to then create
+# Direct/Asymmetric vs Indirect/Symmetric IRB
+
+|                  | Direct Routing                                                                                                                                                                                 | Indirect Routing                                                                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Configuration    | All the VTEPs are configured for routing; i.e. SVIs + VARP exist on all VTEPs.                                                                                                                 | Only a subset of VTEPs are configured for routing; i.e. SVIs + VARP only on a subset of VTEPs.                  |
+| Routing Behavior | Routing is asymmetric by design; i.e. the onward and reverse flows are first-hop routed + VXLAN bridged by different VTEPs. Adjust MAC and ARP timers appropriately to avoid unicast flooding. | Routing is symmetric; i.e. both onward and reverse flows get VXLAN routed in the same manner via a transit VNI. |
+| Forwarding Path  | The forwarding data path is optimal for the routed traffic.                                                                                                                                    | The forwarding data path could be sub-optimal for routed traffic that can cause additional latency.             |
+Direct routing is asymmetric. Request and response follow different paths.
+
+A packet is sent from 
+```
+Host A on VNI 10010 on VTEP 1 --> 
+Host B on VNI 10011 on VTEP 2 
+```
+In direct/asymmetric routing...
+    VTEP 1 routes the packet to VNI 10010 and sends it.
+    Ingress vtep must have all vlans/vni to route locally
+
+In symmetric routing...
+    routed to transit vni sent routed to destination vni
+    bridging only between vtep and tenant
+
+Need SVI in either case. 
+
+## Asymmetric IRB
+https://youtu.be/fzeHQF0msYM?si=06Ah6HALDsAzE06J&t=2587
+![[Pasted image 20240324153832.png|350]]
+![[Pasted image 20240324192401.png|325]]
+
+##**Selective ARP:**
+- Don't consume hardware resources for ARP entries unless they represent a remote host communicating with our locally attached host.
+- Selective ARP is helpful for resource reduction in asymmetric IRB
+```
+(config)#router l2-vpn
+(config-rtr-l2-vpn)#arp selective install
+```
+  
+
+![[Pasted image 20240324182954.png|625]]
+
+## Symmetric IRB
+https://youtu.be/fzeHQF0msYM?si=XBt-WDsfaAQdylNm&t=3132
+![[Pasted image 20240324155045.png|350]]
+*as soon as you need layer 3 multitenancy you're in a symmetric model*
+
+![[Pasted image 20240324161840.png]]
+![[Pasted image 20240324162043.png]]
+vlan aware bundle config
+![[Pasted image 20240324161915.png]]
+
+![[Pasted image 20240324162933.png]]
+Translation: 10.10.10.100/32 can be reached by vtep 2.2.2.1. When sending use VNI 50001 to make sure this is in the right VRF and use the vtep's mac address so that the vtep know it has to make a routing decision.
+
+**Dual VNI Type 2 Route (second one):**
+![[Pasted image 20240324215000.png]]
+
+**Type 5 Routes:**
+![[Pasted image 20240324164141.png]]
+
+**Frame between vteps:**
+![[Pasted image 20240324163527.png]]
+
+**Arp:**
+![[Pasted image 20240324164336.png]]
+## SVI Setup
+![[Pasted image 20240324142721.png]]
+Note, `int vlan 10` differs from `vlan 10`.
+```
+>>> int vlan 10
+>>> ip address virtual 10.10.10.1/24 // provides consistent gw ip/mac
+```
+> *Every ToR switch that's a vtep operating as the first hop router for their local bridge domains will have this particular address for vlan 10*
+
+# EVPN Route Types
+
+src mac, dmac
+Look up dmac in table, forward to correct port
+
+If dmac unknown, flood
+
+Mac learning helps reduce flooding. Associate mac with port using src mac
+
+normal l2 mac learning:
+mac,vlan -> port
+vxlan mac learning:
+mac,vlan -> vtep ip
+
+split horizon meaning never send back into tunnel
+
+| Route Type                                      | Content                                                                                                              | Description                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Route Type 1 / Ethernet Auto Discovery          | RD, ESI, Ethernet Tag Id, MPLS Label                                                                                 | Multiple routes originated by a VTEP could be identified for quick single-update withdrawal in multi-homed scenarios (non MLAG).                                                                                                                                                                                           |
+| Route Type 2 / MAC/IP Route                     | RD, ESI, Ethernet Tag Id, MAC Address Length, MAC Address, IP Address length, IP Address, MPLS Label 1, MPLS Label 2 | MAC address to VTEP bindings and also optionally IP bindings for those MAC addresses.                                                                                                                                                                                                                                      |
+| Route Type 3 / Inclusive Multicast Ethernet Tag | RD, Ethernet Tag Id, IP Address Length, Originator Router’s IP Address                                               | Specifies the mechanism to inform about the preferred method for distributing BUM packets.                                                                                                                                                                                                                                 |
+| Route Type 4 / Ethernet Segment Route           | RD, ESI, IP Address Length, Originator Router’s IP Address                                                           | In multihomed scenarios (non MLAG) this allows for identifying the designated forwarder for BUM traffic.                                                                                                                                                                                                                   |
+| Route Type 5 / IP Prefix Route                  | RD, ESI, Ethernet Tag ID, IP Prefix Length, IP Prefix, GW IP Address, MPLS Label                                     | Key is Ethernet Tag ID, IP Prefix Length and IP Prefix. All IP addresses in the route have to be of the same type. A total route length of 64 indicates a v4 Address. A total route length of 256 indicates a v6 Address (which we will not support in Phase 1). [Specified in draft-ietf-bess-evpn-prefix-advertisement]. |
+
+| Route Type | Description                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| 1          | Auto-Discover Segment route – For A/A multi-homing forwarding, and to allow remote discovery of dual-homed Segments. |
+| 2          | MAC address Route - Advertisement of locally learnt/provisioned MAC address and optionally IP addresses.             |
+| 3          | Inclusive Multicast Ethernet Route - For advertisement EVI membership for the creation of ingress replication lists  |
+| 4          | Ethernet Segment Route – For multi-homing deployments to allow Peer discovery on same segment and DF election        |
+| 5          | IP prefix Route, advertisement of a IP prefix and next-hop, no MAC address for the route is advertised.              |
+##### Route Type 2 and Type 3
+![[Pasted image 20240319110449.png|425]]![[Screenshot 2024-03-18 102400.png|775]]
+
+## Type-1: Ethernet A-D route
+Auto-Discover Segment route – For A/A multi-homing forwarding, and to allow remote discovery of dual-homed Segments.
+
+When a type 2 MAC/IP advertisement route indicates that a MAC address is associated with an Ethernet segment, type 1 routes are used to determine which tunnel endpoint or endpoints should actually be used.
+
+### Ethernet A-D Per ESI - Mass Withdraw Rt
+Ethernet A-D route per ESI route, announces the reachability of a multi-homed Ethernet Segment.
+The route type is used for fast convergence (ie: ‘mass withdraw’) functions, as well as split horizon
+filtering used for active-active multi-homing. 
+
+### Ethernet A-D Per EVI - Mac aliasing route
+Ethernet A-D route per EVI route, is used to implement the Aliasing and Backup Path features of EVPN associated with active-active multi-homing.
+
+Enable vtep to announce attachment to a given EVI on a particular ES. Lays the foundation for ECMP to multihomed device.
+
+## Type-2: Host advertisement Route
+MAC address Route - Advertisement of locally learnt/provisioned MAC address and optionally IP addresses.
+
+Used to advertise the reachability of a MAC address, or optionally a MAC and IP binding as
+learned by a specific EVI. With the advertisement of the optional IP address of the host, EVPN
+provides the ability for VTEPs to perform ARP suppression and ARP proxy to reduce flooding
+within the Layer 2 VPN.
+
+**Simple L2 Route for asymmetric IRB:**
+![[Pasted image 20240325105801.png|750]]
+**"Dual VNI" route in symmetric IRB:**
+![[Pasted image 20240328124928.png|975]]
+
+## Type-3: Inclusive Multicast route
+Inclusive Multicast Ethernet Route - For advertisement EVI membership for the creation of ingress replication lists
+
+The type-3 route is used to advertise the membership of a specific Layer 2 domain (VNI within the
+VXLAN domain), allowing the dynamic discovery of remote VTEPs in a specific VNI and the
+population of a VTEP ingress flood list for the forwarding of Broadcast Unknown unicast and
+Multicast (BUM) traffic.
+
+## Type-4: Ethernet Segment Route
+Ethernet Segment Route – For multi-homing deployments to allow Peer discovery on same segment and DF election
+
+The type-4 route is specific to VTEPs supporting the EVPN multi-homing model, for active-active
+and active-standby forwarding. The route is used to discover VTEPs which are attached to the
+same shared Ethernet Segment. Additionally, this route type is used in the Designated Forwarder
+(DF) election process.
+
+
+Type 4 Ethernet segment routes are used by BGP peers with a matching Ethernet segment and route target configured on a local interface. They exist to elect the designated forwarder on a per segment/VNI basis, which is responsible for sending multi-destination traffic to the connected CE.
+
+## Type-5: IP-prefix route advertisement
+IP prefix Route, advertisement of a IP prefix and next-hop, no MAC address for the route is advertised.
+
+The type-5 route is used to advertise IP prefixes rather the MAC and IP hosts addresses of the
+type-2 route. This advertisement of prefixes into the EVPN domain provides the ability to build
+classic layer 3 VPN topologies.
+![[Pasted image 20240328124830.png]]
+# References
+#needsReview vrrp, varp
+
+#needsReview 
+![[Pasted image 20240319130949.png]]
+
+#### [EVPN VXLAN yt vid](https://www.youtube.com/@networkinginstitute)
+
+![[Pasted image 20240319120250.png|500]]
+
+#### Why would we use EVPN with VXLAN?
+![[Pasted image 20240319133616.png]]
+#### Evpn network building
+![[Pasted image 20240319131543.png|450]]
+![[Pasted image 20240319131546.png|425]]
+
+#### Mac vrf vs vrf
+![[Screenshot 2024-03-17 152622.png]]
+
+IGMP Snooping #needsReview![[Screenshot 2024-03-08 135704.png]]
+
+#### Vxlan Mlag Info
+> VXLAN Routing
+> VXLAN routing is enabled by creating a VLAN interface on the VXLAN-enabled VLAN and assigning an IP address to the VLAN interface. The IP address serves as VXLAN gateway for devices that are accessible from the VXLAN-enabled VLAN.
+> 
+> VXLAN and MLAG
+> VXLAN over MLAG provides redundancy in hardware VTEPs. VTI configuration must be identical on each MLAG peer for them to act as a single VTEP. This also prevents the remote MAC from flapping between the remote VTEPs by ensuring that the rest of the network sees a host that is connected to the MLAG interface as residing behind a single VTEP.
+> 
+> Differences between VXLAN bridging and routing implementations over MLAG are applicable for the DCS-7050X series platform.
+> - VXLAN routing recirculates a packet twice, with the first iteration performing the routing action involving an L2 header rewrite, and the second recirculation performing VXLAN encap and decap operations. Recirculation is achieved by MAC loopback on dedicated loopback interfaces.
+> - The configuration for VXLAN routing on an MLAG VTEP includes separate Recirc-Channel configuration on both peers. The virtual IP, virtual MAC, and virtual VARP VTEP IP addresses are identical on both peers.
+> 
+> The following VTI elements must be configured identically on both MLAG peers:
+> - VLAN-VNI mappings 
+> - VTEP IP address of the source loopback interface 
+> - Flood VTEP list used for head-end replication 
+> 
+> If OSPF is also in use, configure the OSPF router ID manually to prevent the switch from using the common VTEP IP address as the router ID.
+> 
+> The following rules are observed by MLAG switches so that they behave as a single VXLAN VTEP:
+> - Only the MLAG peer that receives a packet performs VXLAN encapsulation on it. 
+> - Packets are not VXLAN encapsulated if they are received from the peer link. 
+> - If a packet is decapsulated and sent over the peer link, it should not be flooded to active MLAG interfaces.
+> - If a packet is sent over the peer link to the CPU, it is not head-end replicated to other remote VTEPs.
+> - If a packet’s destination is the VTEP IP address, it is terminated by the MLAG peer that receives 
+> it.
+
+
+#### Vxlan Details Info
+> The network infrastructure must support the following to support VXLANS:
+> - Multicast support: IGMP and PIM
+> - Layer 3 routing protocol: OSPF, BGP, IS-IS
+> For the most part, networking devices process VXLAN traffic transparently. That is, IP encapsulated traffic is switched or routed as any IP traffic would be. VXLAN gateways, also called Virtual Tunnel End Points (VTEP), provide the encapsulating/de-encapsulating services central to VXLAN. VTEPS can be virtual bridges in the hypervisor, VXLAN aware VM applications, or VXLAN capable switching hardware. VTEPs are key to virtualizing networks across the existing data center infrastructure.
+> 
+> Each VXLAN network segment is associated with a unique 24bit VXLAN Network Identifier, or VNI. The 24-bit address space allows scaling virtual networks beyond the 4096 available with 802.1Q to 16.7 million possible virtual networks. However, multicast and network hardware limitations will reduce the usable number of virtual networks in most deployments. VMs in a logical L2 domain use the same subnet and are mapped to a common VNI. It’s the L2 to VNI mapping that lets VMs communicate with one another. Note that VXLAN doesn’t change Layer 3 addressing schemes. IP addressing rules employed in a physical L2 still apply to the virtual networks.
+> 
+> VXLANs maintain VM identity uniqueness by combining the VM’s MAC address and its VNI. This is interesting because it allows for duplicate MAC addresses to exist in a datacenter domain. The only restriction is that duplicate MACs cannot exist on the same VNI.
+> 
+> Virtual machines on a VNI subnet don’t require any special configuration to support VXLAN because the encap/decap and VNI mapping are managed by the VTEP built into the hypervisor. VXLAN capable switching platforms are similarly responsible for the encap/decap overhead of 802.1q attached network devices. The VTEP must be configured with the Layer 2 or IP subnet to VNI network mappings as well as VNI to IP multicast groups. The former mapping allows VTEPS to build forwarding tables for VNI/MAC traffic flows and the latter allows VTEPs to emulate broadcast/multicast functions across the overlay network.
+> 
+> Synchronization of VTEP configurations can be automated with common configuration management tools like RANCID, or they can be managed through VMware’s vCenter Orchestrator, Open vSwitch, or other systems.
+
+#### Vxlan Routing Rules Info
+> With all virtualization elements in place, the VTEP executes its forwarding rules as follows:
+> - If the source and destination MAC addresses live on the same host, traffic is locally switched through the vSwitch and no VXLAN encap/decap is performed.
+> - If the destination MAC address is not on the ESX host, frames are encapsulated in the appropriate VXLAN header by the source VTEP and are forwarded to the destination VTEP based on its local table. The destination VTEP will unbundle the inner frame from the VXLAN header and deliver it to the recipient VM.
+> - For unknown unicast or broadcast/multicast traffic, the local VTEP encapsulates the frame in a VXLAN header and multicasts the encapsulated frame to the VNI multicast address that is assigned to the VNI at the time of creation. This includes all ARPs, Boot-p/DHCP requests, etc. VTEPs on other hosts receive the multicast frame and process them much the same way unicast traffic is (see note 2 above).
+
+#### Vxlan Frame
+![[Pasted image 20240319123458.png|600]]![[Pasted image 20240319123736.png|600]]
+
+#### Vxlan Terms
+![[Pasted image 20240319123227.png]]
+
+#### Vxlan Overview
+![[Screenshot_(42)-transformed.png]]
+
+#### Vxlan Helps with L3 limitations
+![[Pasted image 20240319123945.png|450]]![[Pasted image 20240319124029.png|450]]
